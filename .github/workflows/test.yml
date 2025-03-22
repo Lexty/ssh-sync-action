@@ -1,0 +1,206 @@
+name: Test SSH Sync Action
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  test-ssh-sync:
+    name: Test SSH Sync Action (${{ matrix.method }})
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        method: [rsync, scp]
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set execute permissions on scripts
+        run: chmod +x src/*.sh
+
+      - name: Set up SSH server and install sshpass
+        run: |
+          # Install SSH server and sshpass for password authentication
+          sudo apt-get update
+          sudo apt-get install -y openssh-server rsync sshpass
+          
+          # Setup SSH server
+          sudo systemctl start ssh
+          
+          # Enable password authentication
+          sudo sed -i 's/^#PasswordAuthentication yes/PasswordAuthentication yes/' /etc/ssh/sshd_config
+          sudo systemctl restart ssh
+          
+          # Create test user
+          sudo useradd -m testuser || echo "User already exists"
+          sudo usermod -s /bin/bash testuser
+          echo "testuser:testpassword" | sudo chpasswd
+          
+          # Create test directories and files
+          sudo mkdir -p /home/testuser/remote-dir
+          echo "This is a test file" | sudo tee /home/testuser/remote-dir/test-file.txt
+          echo "Another test file" | sudo tee /home/testuser/remote-dir/another-file.txt
+          sudo chown -R testuser:testuser /home/testuser/remote-dir || echo "Could not change ownership"
+          
+          # Setup SSH keys for testing
+          mkdir -p ~/.ssh
+          ssh-keygen -t rsa -f ~/.ssh/id_rsa -N "" -q
+          
+          sudo mkdir -p /home/testuser/.ssh
+          cat ~/.ssh/id_rsa.pub | sudo tee /home/testuser/.ssh/authorized_keys > /dev/null
+          sudo chown -R testuser:testuser /home/testuser/.ssh || echo "Could not change ownership"
+          sudo chmod 700 /home/testuser/.ssh
+          sudo chmod 600 /home/testuser/.ssh/authorized_keys
+          
+          # Add localhost to known hosts
+          ssh-keyscan -H localhost >> ~/.ssh/known_hosts
+          
+          # Test SSH connection to verify it works
+          ssh -o StrictHostKeyChecking=no -i ~/.ssh/id_rsa testuser@localhost "echo SSH connection successful"
+          
+          # Test password authentication to verify it works
+          sshpass -p "testpassword" ssh -o StrictHostKeyChecking=no testuser@localhost "echo Password authentication successful"
+
+      - name: Create test data for upload
+        run: |
+          mkdir -p test/upload
+          mkdir -p test/download
+          echo "Local file for upload" > test/upload/local-file.txt
+          echo "Another local file for upload" > test/upload/local-file2.txt
+
+      - name: Test first SSH commands
+        uses: ./
+        with:
+          host: localhost
+          user: testuser
+          pass: testpassword
+          first_ssh: |
+            mkdir -p ~/test-dir
+            echo "Hello from SSH" > ~/test-dir/hello.txt
+            ls -la ~/test-dir
+            cat ~/test-dir/hello.txt
+
+      - name: Test rsync upload
+        if: matrix.method == 'rsync'
+        uses: ./
+        with:
+          host: localhost
+          user: testuser
+          pass: testpassword
+          rsync_upload: |
+            './test/upload/*' => /home/testuser/upload-dir/
+            test/upload/local-file.txt => /home/testuser/single-file.txt
+
+      - name: Test scp upload
+        if: matrix.method == 'scp'
+        uses: ./
+        with:
+          host: localhost
+          user: testuser
+          pass: testpassword
+          scp_upload: |
+            './test/upload/*' => /home/testuser/upload-dir/
+            test/upload/local-file.txt => /home/testuser/single-file.txt
+
+      - name: Verify uploads
+        uses: ./
+        with:
+          host: localhost
+          user: testuser
+          pass: testpassword
+          first_ssh: |
+            ls -la /home/testuser/upload-dir/
+            ls -la /home/testuser/single-file.txt
+            cat /home/testuser/single-file.txt
+
+      - name: Test rsync download
+        if: matrix.method == 'rsync'
+        uses: ./
+        with:
+          host: localhost
+          user: testuser
+          pass: testpassword
+          rsync_download: |
+            /home/testuser/remote-dir/* => ./test/download/
+            /home/testuser/remote-dir/test-file.txt => ./test/download/single-file.txt
+
+      - name: Test scp download
+        if: matrix.method == 'scp'
+        uses: ./
+        with:
+          host: localhost
+          user: testuser
+          pass: testpassword
+          scp_download: |
+            /home/testuser/remote-dir/* => ./test/download/
+            /home/testuser/remote-dir/test-file.txt => ./test/download/single-file.txt
+
+      - name: Verify downloads
+        run: |
+          ls -la ./test/download/
+          [ -f "./test/download/test-file.txt" ] && echo "✅ File download successful" || echo "❌ File download failed"
+          [ -f "./test/download/single-file.txt" ] && echo "✅ Single file download successful" || echo "❌ Single file download failed"
+          cat ./test/download/test-file.txt
+          cat ./test/download/single-file.txt
+
+      - name: Test last SSH commands
+        uses: ./
+        with:
+          host: localhost
+          user: testuser
+          pass: testpassword
+          last_ssh: |
+            echo "Cleanup operations"
+            rm -rf ~/test-dir
+            rm -rf ~/upload-dir
+            ls -la ~
+
+  test-password-auth:
+    name: Test Password Authentication
+    runs-on: ubuntu-latest
+    needs: test-ssh-sync
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set execute permissions on scripts
+        run: chmod +x src/*.sh
+
+      - name: Set up SSH server with password auth
+        run: |
+          # Install SSH server and sshpass
+          sudo apt-get update
+          sudo apt-get install -y openssh-server sshpass
+
+          # Setup SSH server for password auth
+          sudo sed -i 's/^#PasswordAuthentication yes/PasswordAuthentication yes/' /etc/ssh/sshd_config
+          sudo systemctl restart ssh
+
+          # Create test user with password
+          sudo useradd -m testuser2 || true
+          echo "testuser2:testpassword2" | sudo chpasswd
+
+          # Create test directories
+          sudo mkdir -p /home/testuser2/remote-dir
+          echo "Password auth test file" | sudo tee /home/testuser2/remote-dir/test-file.txt
+          sudo chown -R testuser2:testuser2 /home/testuser2/remote-dir
+
+      - name: Test SCP with password authentication
+        uses: ./
+        with:
+          host: localhost
+          user: testuser2
+          pass: testpassword2
+          first_ssh: |
+            echo "Testing password authentication"
+            ls -la ~
+          scp_download: |
+            /home/testuser2/remote-dir/test-file.txt => ./test-password.txt
+
+      - name: Verify password auth download
+        run: |
+          [ -f "./test-password.txt" ] && echo "✅ Password auth download successful" || echo "❌ Password auth download failed"
+          cat ./test-password.txt

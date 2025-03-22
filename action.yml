@@ -1,0 +1,145 @@
+name: 'SSH Sync Action'
+description: 'Execute SSH commands and bidirectional file transfers via rsync and scp'
+author: 'Your Name'
+branding:
+  icon: 'upload-cloud'
+  color: 'blue'
+
+inputs:
+  host:
+    description: 'SSH remote host'
+    required: true
+  port:
+    description: 'SSH remote port'
+    required: false
+    default: '22'
+  user:
+    description: 'SSH remote user'
+    required: true
+  pass:
+    description: 'SSH remote password'
+    required: false
+  key:
+    description: 'SSH private key as string'
+    required: false
+  connect_timeout:
+    description: 'Connection timeout to remote host'
+    required: false
+    default: '30s'
+  first_ssh:
+    description: 'Execute commands before syncing data'
+    required: false
+  scp_upload:
+    description: 'Upload from local to remote using scp'
+    required: false
+  scp_download:
+    description: 'Download from remote to local using scp'
+    required: false
+  rsync_upload:
+    description: 'Upload from local to remote using rsync'
+    required: false
+  rsync_download:
+    description: 'Download from remote to local using rsync'
+    required: false
+  last_ssh:
+    description: 'Execute commands after syncing data'
+    required: false
+  scp_options:
+    description: 'Additional scp command options'
+    required: false
+    default: ''
+  rsync_options:
+    description: 'Additional rsync command options'
+    required: false
+    default: '-avz --delete'
+  ssh_options:
+    description: 'Additional SSH options'
+    required: false
+    default: ''
+
+runs:
+  using: 'composite'
+  steps:
+    - name: 'Setup SSH key'
+      shell: bash
+      run: ${{ github.action_path }}/src/setup-ssh.sh
+      env:
+        SSH_KEY: ${{ inputs.key }}
+        SSH_PORT: ${{ inputs.port }}
+        SSH_HOST: ${{ inputs.host }}
+
+    - name: 'First SSH commands'
+      uses: appleboy/ssh-action@master
+      with:
+        host: ${{ inputs.host }}
+        port: ${{ inputs.port }}
+        username: ${{ inputs.user }}
+        password: ${{ inputs.pass }}
+        key: ${{ inputs.key }}
+        script: ${{ inputs.first_ssh }}
+        timeout: ${{ inputs.connect_timeout }}
+      if: ${{ inputs.first_ssh != '' }}
+
+    - name: 'Upload data using rsync'
+      shell: bash
+      run: ${{ github.action_path }}/src/rsync-upload.sh
+      env:
+        SSH_HOST: ${{ inputs.host }}
+        SSH_PORT: ${{ inputs.port }}
+        SSH_USER: ${{ inputs.user }}
+        SSH_PASS: ${{ inputs.pass }}
+        SSH_OPTIONS: ${{ inputs.ssh_options }}
+        RSYNC_OPTIONS: ${{ inputs.rsync_options }}
+        RSYNC_UPLOAD_CONFIG: ${{ inputs.rsync_upload }}
+      if: ${{ inputs.rsync_upload != '' }}
+
+    - name: 'Upload data using scp'
+      shell: bash
+      run: ${{ github.action_path }}/src/scp-upload.sh
+      env:
+        SSH_HOST: ${{ inputs.host }}
+        SSH_PORT: ${{ inputs.port }}
+        SSH_USER: ${{ inputs.user }}
+        SSH_PASS: ${{ inputs.pass }}
+        SSH_OPTIONS: ${{ inputs.ssh_options }}
+        SCP_OPTIONS: ${{ inputs.scp_options }}
+        SCP_UPLOAD_CONFIG: ${{ inputs.scp_upload }}
+      if: ${{ inputs.scp_upload != '' }}
+
+    - name: 'Download data using rsync'
+      shell: bash
+      run: ${{ github.action_path }}/src/rsync-download.sh
+      env:
+        SSH_HOST: ${{ inputs.host }}
+        SSH_PORT: ${{ inputs.port }}
+        SSH_USER: ${{ inputs.user }}
+        SSH_PASS: ${{ inputs.pass }}
+        SSH_OPTIONS: ${{ inputs.ssh_options }}
+        RSYNC_OPTIONS: ${{ inputs.rsync_options }}
+        RSYNC_DOWNLOAD_CONFIG: ${{ inputs.rsync_download }}
+      if: ${{ inputs.rsync_download != '' }}
+
+    - name: 'Download data using scp'
+      shell: bash
+      run: ${{ github.action_path }}/src/scp-download.sh
+      env:
+        SSH_HOST: ${{ inputs.host }}
+        SSH_PORT: ${{ inputs.port }}
+        SSH_USER: ${{ inputs.user }}
+        SSH_PASS: ${{ inputs.pass }}
+        SSH_OPTIONS: ${{ inputs.ssh_options }}
+        SCP_OPTIONS: ${{ inputs.scp_options }}
+        SCP_DOWNLOAD_CONFIG: ${{ inputs.scp_download }}
+      if: ${{ inputs.scp_download != '' }}
+
+    - name: 'Last SSH commands'
+      uses: appleboy/ssh-action@master
+      with:
+        host: ${{ inputs.host }}
+        port: ${{ inputs.port }}
+        username: ${{ inputs.user }}
+        password: ${{ inputs.pass }}
+        key: ${{ inputs.key }}
+        script: ${{ inputs.last_ssh }}
+        timeout: ${{ inputs.connect_timeout }}
+      if: ${{ inputs.last_ssh != '' }}
